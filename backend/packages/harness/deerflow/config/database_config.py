@@ -63,20 +63,21 @@ class DatabaseConfig(BaseModel):
     # -- Derived helpers (not user-configured) --
 
     @property
+    def _resolved_sqlite_dir(self) -> str:
+        """Resolve sqlite_dir to an absolute path (relative to CWD)."""
+        from pathlib import Path
+
+        return str(Path(self.sqlite_dir).resolve())
+
+    @property
     def checkpointer_sqlite_path(self) -> str:
         """SQLite file path for the LangGraph checkpointer."""
-        from deerflow.config.paths import resolve_path
-
-        resolved_dir = str(resolve_path(self.sqlite_dir))
-        return os.path.join(resolved_dir, "checkpoints.db")
+        return os.path.join(self._resolved_sqlite_dir, "checkpoints.db")
 
     @property
     def app_sqlite_path(self) -> str:
         """SQLite file path for application ORM data."""
-        from deerflow.config.paths import resolve_path
-
-        resolved_dir = str(resolve_path(self.sqlite_dir))
-        return os.path.join(resolved_dir, "app.db")
+        return os.path.join(self._resolved_sqlite_dir, "app.db")
 
     @property
     def app_sqlalchemy_url(self) -> str:
