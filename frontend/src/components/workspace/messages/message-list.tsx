@@ -4,6 +4,7 @@ import {
   Conversation,
   ConversationContent,
 } from "@/components/ai-elements/conversation";
+import type { FeedbackData } from "@/core/api/feedback";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   extractContentFromMessage,
@@ -18,6 +19,7 @@ import { useRehypeSplitWordsIntoSpans } from "@/core/rehype";
 import type { Subtask } from "@/core/tasks";
 import { useUpdateSubtask } from "@/core/tasks/context";
 import type { AgentThreadState } from "@/core/threads";
+import { useThreadFeedback } from "@/core/threads/hooks";
 import { cn } from "@/lib/utils";
 
 import { ArtifactFileList } from "../artifacts/artifact-file-list";
@@ -46,7 +48,11 @@ export function MessageList({
   const { t } = useI18n();
   const rehypePlugins = useRehypeSplitWordsIntoSpans(thread.isLoading);
   const updateSubtask = useUpdateSubtask();
+  const { data: feedbackData } = useThreadFeedback(threadId);
   const messages = thread.messages;
+
+  // Track AI message ordinal index for feedback mapping
+  let aiMessageIndex = 0;
   if (thread.isThreadLoading && messages.length === 0) {
     return <MessageListSkeleton />;
   }
@@ -58,12 +64,23 @@ export function MessageList({
         {groupMessages(messages, (group) => {
           if (group.type === "human" || group.type === "assistant") {
             return group.messages.map((msg) => {
+              let runId: string | undefined;
+              let feedback: FeedbackData | null = null;
+              if (msg.type !== "human" && feedbackData) {
+                runId =
+                  feedbackData.runIdByAiIndex[aiMessageIndex] ?? undefined;
+                feedback = runId
+                  ? (feedbackData.feedbackByRunId[runId] ?? null)
+                  : null;
+                aiMessageIndex++;
+              }
               return (
                 <MessageListItem
                   key={`${group.id}/${msg.id}`}
                   message={msg}
                   isLoading={thread.isLoading}
-                  threadId={threadId}
+                  runId={runId}
+                  feedback={feedback}
                 />
               );
             });
@@ -167,7 +184,7 @@ export function MessageList({
               results.push(
                 <div
                   key="subtask-count"
-                  className="text-muted-foreground pt-2 text-sm font-normal"
+                  className="text-muted-foreground font-norma pt-2 text-sm"
                 >
                   {t.subtasks.executing(tasks.size)}
                 </div>,

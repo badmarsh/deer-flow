@@ -679,15 +679,29 @@ export function useRenameThread() {
   });
 }
 
+export interface ThreadFeedbackData {
+  /** Maps AI message ordinal index (0-based, counting only AI messages) to run_id */
+  runIdByAiIndex: string[];
+  /** Maps run_id to feedback data */
+  feedbackByRunId: Record<
+    string,
+    { feedback_id: string; rating: number; comment: string | null }
+  >;
+}
+
 export function useThreadFeedback(threadId: string | null | undefined) {
   return useQuery({
     queryKey: ["thread-feedback", threadId],
-    queryFn: async () => {
-      if (!threadId) return {};
+    queryFn: async (): Promise<ThreadFeedbackData> => {
+      const empty: ThreadFeedbackData = {
+        runIdByAiIndex: [],
+        feedbackByRunId: {},
+      };
+      if (!threadId) return empty;
       const res = await fetchWithAuth(
         `${getBackendBaseURL()}/api/threads/${encodeURIComponent(threadId)}/messages?limit=200`,
       );
-      if (!res.ok) return {};
+      if (!res.ok) return empty;
       const messages: Array<{
         run_id: string;
         event_type: string;
@@ -697,16 +711,20 @@ export function useThreadFeedback(threadId: string | null | undefined) {
           comment: string | null;
         } | null;
       }> = await res.json();
-      const feedbackMap: Record<
+      const runIdByAiIndex: string[] = [];
+      const feedbackByRunId: Record<
         string,
         { feedback_id: string; rating: number; comment: string | null }
       > = {};
       for (const msg of messages) {
+        if (msg.event_type === "ai_message") {
+          runIdByAiIndex.push(msg.run_id);
+        }
         if (msg.feedback && msg.run_id) {
-          feedbackMap[msg.run_id] = msg.feedback;
+          feedbackByRunId[msg.run_id] = msg.feedback;
         }
       }
-      return feedbackMap;
+      return { runIdByAiIndex, feedbackByRunId };
     },
     enabled: !!threadId,
     staleTime: 30_000,
