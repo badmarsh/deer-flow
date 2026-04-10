@@ -294,6 +294,7 @@ export function useThreadStream({
     onFinish(state) {
       listeners.current.onFinish?.(state.values);
       void queryClient.invalidateQueries({ queryKey: ["threads", "search"] });
+      void queryClient.invalidateQueries({ queryKey: ["thread-feedback"] });
     },
   });
 

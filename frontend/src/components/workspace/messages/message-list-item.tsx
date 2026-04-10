@@ -36,11 +36,13 @@ import { MarkdownContent } from "./markdown-content";
 
 export function MessageListItem({
   className,
+  threadId,
   message,
   isLoading,
   threadId,
 }: {
   className?: string;
+  threadId?: string;
   message: Message;
   isLoading?: boolean;
   threadId: string;
@@ -61,10 +63,13 @@ export function MessageListItem({
         <MessageToolbar
           className={cn(
             isHuman ? "-bottom-9 justify-end" : "-bottom-8",
-            "absolute right-0 left-0 z-20 opacity-0 transition-opacity delay-200 duration-300 group-hover/conversation-message:opacity-100",
+            "absolute right-0 left-0 z-20",
+            !isHuman && runId && threadId
+              ? "opacity-100"
+              : "opacity-0 transition-opacity delay-200 duration-300 group-hover/conversation-message:opacity-100",
           )}
         >
-          <div className="flex gap-1">
+          <div className="flex gap-1 opacity-0 transition-opacity delay-200 duration-300 group-hover/conversation-message:opacity-100">
             <CopyButton
               clipboardData={
                 extractContentFromMessage(message) ??
@@ -73,6 +78,13 @@ export function MessageListItem({
               }
             />
           </div>
+          {!isHuman && runId && threadId && (
+            <FeedbackButtons
+              threadId={threadId}
+              runId={runId}
+              initialFeedback={feedback ?? null}
+            />
+          )}
         </MessageToolbar>
       )}
     </AIElementMessage>
