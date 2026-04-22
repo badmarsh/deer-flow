@@ -7,12 +7,9 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
-from .schemas import DisconnectMode, RunStatus
-
-if TYPE_CHECKING:
-    from deerflow.runtime.runs.store.base import RunStore
+from ..types import RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +26,7 @@ class RunRecord:
     thread_id: str
     assistant_id: str | None
     status: RunStatus
-    on_disconnect: DisconnectMode
+    on_disconnect: Literal["cancel", "continue"]
     multitask_strategy: str = "reject"
     metadata: dict = field(default_factory=dict)
     kwargs: dict = field(default_factory=dict)
@@ -49,12 +46,12 @@ class RunManager:
     that run history survives process restarts.
     """
 
-    def __init__(self, store: RunStore | None = None) -> None:
+    def __init__(self, store: Any | None = None) -> None:
         self._runs: dict[str, RunRecord] = {}
         self._lock = asyncio.Lock()
         self._store = store
 
-    async def _persist_to_store(self, record: RunRecord) -> None:
+    async def _persist_to_store(self, record: RunRecord, *, follow_up_to_run_id: str | None = None) -> None:
         """Best-effort persist run record to backing store."""
         if self._store is None:
             return
@@ -68,6 +65,7 @@ class RunManager:
                 metadata=record.metadata or {},
                 kwargs=record.kwargs or {},
                 created_at=record.created_at,
+                follow_up_to_run_id=follow_up_to_run_id,
             )
         except Exception:
             logger.warning("Failed to persist run %s to store", record.run_id, exc_info=True)
@@ -85,10 +83,11 @@ class RunManager:
         thread_id: str,
         assistant_id: str | None = None,
         *,
-        on_disconnect: DisconnectMode = DisconnectMode.cancel,
+        on_disconnect: Literal["cancel", "continue"] = "cancel",
         metadata: dict | None = None,
         kwargs: dict | None = None,
         multitask_strategy: str = "reject",
+        follow_up_to_run_id: str | None = None,
     ) -> RunRecord:
         """Create a new pending run and register it."""
         run_id = str(uuid.uuid4())
@@ -107,7 +106,7 @@ class RunManager:
         )
         async with self._lock:
             self._runs[run_id] = record
-        await self._persist_to_store(record)
+        await self._persist_to_store(record, follow_up_to_run_id=follow_up_to_run_id)
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)
         return record
 
@@ -120,7 +119,7 @@ class RunManager:
         async with self._lock:
             # Dict insertion order matches creation order, so reversing it gives
             # us deterministic newest-first results even when timestamps tie.
-            return [r for r in self._runs.values() if r.thread_id == thread_id]
+            return [r for r in reversed(self._runs.values()) if r.thread_id == thread_id]
 
     async def set_status(self, run_id: str, status: RunStatus, *, error: str | None = None) -> None:
         """Transition a run to a new status."""
@@ -170,10 +169,11 @@ class RunManager:
         thread_id: str,
         assistant_id: str | None = None,
         *,
-        on_disconnect: DisconnectMode = DisconnectMode.cancel,
+        on_disconnect: Literal["cancel", "continue"] = "cancel",
         metadata: dict | None = None,
         kwargs: dict | None = None,
         multitask_strategy: str = "reject",
+        follow_up_to_run_id: str | None = None,
     ) -> RunRecord:
         """Atomically check for inflight runs and create a new one.
 
@@ -227,7 +227,7 @@ class RunManager:
             )
             self._runs[run_id] = record
 
-        await self._persist_to_store(record)
+        await self._persist_to_store(record, follow_up_to_run_id=follow_up_to_run_id)
         logger.info("Run created: run_id=%s thread_id=%s", run_id, thread_id)
         return record
 
