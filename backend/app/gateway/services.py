@@ -8,6 +8,7 @@ frames, and consuming stream bridge events.  Router modules
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -17,7 +18,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 from langchain_core.messages import HumanMessage
 
-from app.gateway.deps import get_run_context, get_run_manager, get_stream_bridge
+from app.gateway.deps import get_run_context, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.utils import sanitize_log_param
 from deerflow.runtime import (
     END_SENTINEL,
@@ -211,6 +212,21 @@ async def start_run(
 
     disconnect = DisconnectMode.cancel if body.on_disconnect == "cancel" else DisconnectMode.continue_
 
+    # Resolve follow_up_to_run_id: explicit from request, or auto-detect from latest successful run
+    follow_up_to_run_id = getattr(body, "follow_up_to_run_id", None)
+    if follow_up_to_run_id is None:
+        run_store = get_run_store(request)
+        try:
+            recent_runs = await run_store.list_by_thread(thread_id, limit=1)
+            if recent_runs and recent_runs[0].get("status") == "success":
+                follow_up_to_run_id = recent_runs[0]["run_id"]
+        except Exception:
+            pass  # Don't block run creation
+
+    # Enrich base context with per-run field
+    if follow_up_to_run_id:
+        run_ctx = dataclasses.replace(run_ctx, follow_up_to_run_id=follow_up_to_run_id)
+
     try:
         record = await run_mgr.create_or_reject(
             thread_id,
@@ -219,6 +235,7 @@ async def start_run(
             metadata=body.metadata or {},
             kwargs={"input": body.input, "config": body.config},
             multitask_strategy=body.multitask_strategy,
+            follow_up_to_run_id=follow_up_to_run_id,
         )
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

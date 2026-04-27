@@ -28,7 +28,7 @@ from app.gateway.routers import (
     threads,
     uploads,
 )
-from deerflow.config.app_config import get_app_config
+from deerflow.config.app_config import AppConfig
 
 # Configure logging
 logging.basicConfig(
@@ -72,18 +72,7 @@ async def _ensure_admin_user(app: FastAPI) -> None:
     from deerflow.persistence.engine import get_session_factory
     from deerflow.persistence.user.model import UserRow
 
-    try:
-        provider = get_local_provider()
-    except RuntimeError:
-        # Auth persistence may not be initialized in some test/boot paths.
-        # Skip admin migration work rather than failing gateway startup.
-        logger.warning("Auth persistence not ready; skipping admin bootstrap check")
-        return
-
-    sf = get_session_factory()
-    if sf is None:
-        return
-
+    provider = get_local_provider()
     admin_count = await provider.count_admin_users()
 
     if admin_count == 0:
@@ -95,6 +84,10 @@ async def _ensure_admin_user(app: FastAPI) -> None:
 
     # Admin already exists — run orphan thread migration for any
     # LangGraph thread metadata that pre-dates the auth module.
+    sf = get_session_factory()
+    if sf is None:
+        return
+
     async with sf() as session:
         stmt = select(UserRow).where(UserRow.system_role == "admin").limit(1)
         row = (await session.execute(stmt)).scalar_one_or_none()
@@ -158,9 +151,11 @@ async def _migrate_orphaned_threads(store, admin_user_id: str) -> int:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
 
-    # Load config and check necessary environment variables at startup
     try:
-        get_app_config()
+        # ``app.state.config`` is the sole source of truth for
+        # ``Depends(get_config)``. Consumers that want AppConfig must receive
+        # it as an explicit parameter; there is no ambient singleton.
+        app.state.config = AppConfig.from_file()
         logger.info("Configuration loaded successfully")
     except Exception as e:
         error_msg = f"Failed to load configuration during gateway startup: {e}"
@@ -181,7 +176,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             from app.channels.service import start_channel_service
 
-            channel_service = await start_channel_service()
+            channel_service = await start_channel_service(app.state.config)
             logger.info("Channel service started: %s", channel_service.get_status())
         except Exception:
             logger.exception("No IM channels configured or channel service failed to start")

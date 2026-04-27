@@ -5,12 +5,11 @@ from typing import override
 
 from langchain.agents import AgentState
 from langchain.agents.middleware import AgentMiddleware
-from langgraph.config import get_config
 from langgraph.runtime import Runtime
 
 from deerflow.agents.memory.message_processing import detect_correction, detect_reinforcement, filter_messages_for_memory
 from deerflow.agents.memory.queue import get_memory_queue
-from deerflow.config.memory_config import get_memory_config
+from deerflow.config.deer_flow_context import DeerFlowContext
 from deerflow.runtime.user_context import get_effective_user_id
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,7 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         self._agent_name = agent_name
 
     @override
-    def after_agent(self, state: MemoryMiddlewareState, runtime: Runtime) -> dict | None:
+    def after_agent(self, state: MemoryMiddlewareState, runtime: Runtime[DeerFlowContext]) -> dict | None:
         """Queue conversation for memory update after agent completes.
 
         Args:
@@ -54,15 +53,11 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         Returns:
             None (no state changes needed from this middleware).
         """
-        config = get_memory_config()
-        if not config.enabled:
+        memory_config = runtime.context.app_config.memory
+        if not memory_config.enabled:
             return None
 
-        # Get thread ID from runtime context first, then fall back to LangGraph's configurable metadata
-        thread_id = runtime.context.get("thread_id") if runtime.context else None
-        if thread_id is None:
-            config_data = get_config()
-            thread_id = config_data.get("configurable", {}).get("thread_id")
+        thread_id = runtime.context.thread_id
         if not thread_id:
             logger.debug("No thread_id in context, skipping memory update")
             return None
@@ -91,7 +86,7 @@ class MemoryMiddleware(AgentMiddleware[MemoryMiddlewareState]):
         # threading.Timer fires on a different thread where ContextVar values are not
         # propagated, so we must store user_id explicitly in ConversationContext.
         user_id = get_effective_user_id()
-        queue = get_memory_queue()
+        queue = get_memory_queue(runtime.context.app_config)
         queue.add(
             thread_id=thread_id,
             messages=filtered_messages,

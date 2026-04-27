@@ -1,9 +1,7 @@
 """Tests for per-user data migration."""
-
 import json
-from pathlib import Path
-
 import pytest
+from pathlib import Path
 
 from deerflow.config.paths import Paths
 
@@ -25,7 +23,6 @@ class TestMigrateThreadDirs:
         (legacy / "file.txt").write_text("hello")
 
         from scripts.migrate_user_isolation import migrate_thread_dirs
-
         migrate_thread_dirs(paths, thread_owner_map={"t1": "alice"})
 
         expected = base_dir / "users" / "alice" / "threads" / "t1" / "user-data" / "workspace" / "file.txt"
@@ -38,7 +35,6 @@ class TestMigrateThreadDirs:
         legacy.mkdir(parents=True)
 
         from scripts.migrate_user_isolation import migrate_thread_dirs
-
         migrate_thread_dirs(paths, thread_owner_map={})
 
         expected = base_dir / "users" / "default" / "threads" / "t2"
@@ -49,7 +45,6 @@ class TestMigrateThreadDirs:
         new_dir.mkdir(parents=True)
 
         from scripts.migrate_user_isolation import migrate_thread_dirs
-
         migrate_thread_dirs(paths, thread_owner_map={"t1": "alice"})
         assert new_dir.exists()
 
@@ -63,7 +58,6 @@ class TestMigrateThreadDirs:
         (dest / "new.txt").write_text("new")
 
         from scripts.migrate_user_isolation import migrate_thread_dirs
-
         migrate_thread_dirs(paths, thread_owner_map={"t1": "alice"})
 
         assert (dest / "new.txt").read_text() == "new"
@@ -75,7 +69,6 @@ class TestMigrateThreadDirs:
         legacy.mkdir(parents=True)
 
         from scripts.migrate_user_isolation import migrate_thread_dirs
-
         migrate_thread_dirs(paths, thread_owner_map={})
 
         assert not (base_dir / "threads").exists()
@@ -85,7 +78,6 @@ class TestMigrateThreadDirs:
         legacy.mkdir(parents=True)
 
         from scripts.migrate_user_isolation import migrate_thread_dirs
-
         report = migrate_thread_dirs(paths, thread_owner_map={"t1": "alice"}, dry_run=True)
 
         assert len(report) == 1
@@ -99,7 +91,6 @@ class TestMigrateMemory:
         legacy_mem.write_text(json.dumps({"version": "1.0", "facts": []}))
 
         from scripts.migrate_user_isolation import migrate_memory
-
         migrate_memory(paths, user_id="default")
 
         expected = base_dir / "users" / "default" / "memory.json"
@@ -115,7 +106,6 @@ class TestMigrateMemory:
         dest.write_text(json.dumps({"version": "new"}))
 
         from scripts.migrate_user_isolation import migrate_memory
-
         migrate_memory(paths, user_id="default")
 
         assert json.loads(dest.read_text())["version"] == "new"
@@ -123,5 +113,4 @@ class TestMigrateMemory:
 
     def test_no_legacy_memory_is_noop(self, base_dir: Path, paths: Paths):
         from scripts.migrate_user_isolation import migrate_memory
-
         migrate_memory(paths, user_id="default")  # should not raise

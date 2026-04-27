@@ -69,6 +69,33 @@ def provisioner_module():
 
 
 @pytest.fixture(autouse=True)
+def _auto_app_config_from_file(monkeypatch, request):
+    """Replace ``AppConfig.from_file`` with a minimal factory so tests that
+    (directly or indirectly, e.g. via the LangGraph Server bootstrap path in
+    ``make_lead_agent``) load AppConfig from disk do not need a real
+    ``config.yaml`` on the filesystem.
+
+    Tests that want to verify the real ``from_file`` behaviour should mark
+    themselves with ``@pytest.mark.real_from_file``.
+    """
+    if request.node.get_closest_marker("real_from_file"):
+        yield
+        return
+    try:
+        from deerflow.config.app_config import AppConfig
+        from deerflow.config.sandbox_config import SandboxConfig
+    except ImportError:
+        yield
+        return
+
+    def _fake_from_file(config_path: str | None = None) -> AppConfig:  # noqa: ARG001
+        return AppConfig(sandbox=SandboxConfig(use="test"))
+
+    monkeypatch.setattr(AppConfig, "from_file", _fake_from_file)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _auto_user_context(request):
     """Inject a default ``test-user-autouse`` into the contextvar.
 

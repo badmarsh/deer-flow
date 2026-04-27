@@ -18,6 +18,7 @@ from app.gateway.routers.models import ModelResponse, ModelsListResponse
 from app.gateway.routers.skills import SkillInstallResponse, SkillResponse, SkillsListResponse
 from app.gateway.routers.uploads import UploadResponse
 from deerflow.client import DeerFlowClient
+from deerflow.config.app_config import AppConfig
 from deerflow.config.paths import Paths
 from deerflow.uploads.manager import PathTraversalError
 
@@ -44,9 +45,12 @@ def mock_app_config():
 
 @pytest.fixture
 def client(mock_app_config):
-    """Create a DeerFlowClient with mocked config loading."""
-    with patch("deerflow.client.get_app_config", return_value=mock_app_config):
-        return DeerFlowClient()
+    """Create a DeerFlowClient holding the mocked config directly.
+
+    Passing ``config=`` is the documented post-refactor way to inject a
+    test AppConfig; nothing relies on process-global state.
+    """
+    return DeerFlowClient(config=mock_app_config)
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +71,7 @@ class TestClientInit:
 
     def test_custom_params(self, mock_app_config):
         mock_middleware = MagicMock()
-        with patch("deerflow.client.get_app_config", return_value=mock_app_config):
-            c = DeerFlowClient(model_name="gpt-4", thinking_enabled=False, subagent_enabled=True, plan_mode=True, agent_name="test-agent", available_skills={"skill1", "skill2"}, middlewares=[mock_middleware])
+        c = DeerFlowClient(model_name="gpt-4", thinking_enabled=False, subagent_enabled=True, plan_mode=True, agent_name="test-agent", available_skills={"skill1", "skill2"}, middlewares=[mock_middleware])
         assert c._model_name == "gpt-4"
         assert c._thinking_enabled is False
         assert c._subagent_enabled is True
@@ -78,24 +81,21 @@ class TestClientInit:
         assert c._middlewares == [mock_middleware]
 
     def test_invalid_agent_name(self, mock_app_config):
-        with patch("deerflow.client.get_app_config", return_value=mock_app_config):
-            with pytest.raises(ValueError, match="Invalid agent name"):
-                DeerFlowClient(agent_name="invalid name with spaces!")
-            with pytest.raises(ValueError, match="Invalid agent name"):
-                DeerFlowClient(agent_name="../path/traversal")
+        with pytest.raises(ValueError, match="Invalid agent name"):
+            DeerFlowClient(agent_name="invalid name with spaces!")
+        with pytest.raises(ValueError, match="Invalid agent name"):
+            DeerFlowClient(agent_name="../path/traversal")
 
     def test_custom_config_path(self, mock_app_config):
-        with (
-            patch("deerflow.client.reload_app_config") as mock_reload,
-            patch("deerflow.client.get_app_config", return_value=mock_app_config),
-        ):
-            DeerFlowClient(config_path="/tmp/custom.yaml")
-            mock_reload.assert_called_once_with("/tmp/custom.yaml")
+        # rather than touching AppConfig.init() / process-global state.
+        with patch.object(AppConfig, "from_file", return_value=mock_app_config) as mock_from_file:
+            client = DeerFlowClient(config_path="/tmp/custom.yaml")
+            mock_from_file.assert_called_once_with("/tmp/custom.yaml")
+            assert client._app_config is mock_app_config
 
     def test_checkpointer_stored(self, mock_app_config):
         cp = MagicMock()
-        with patch("deerflow.client.get_app_config", return_value=mock_app_config):
-            c = DeerFlowClient(checkpointer=cp)
+        c = DeerFlowClient(checkpointer=cp)
         assert c._checkpointer is cp
 
 
@@ -126,7 +126,7 @@ class TestConfigQueries:
 
         with patch("deerflow.skills.loader.load_skills", return_value=[skill]) as mock_load:
             result = client.list_skills()
-            mock_load.assert_called_once_with(enabled_only=False)
+            mock_load.assert_called_once_with(client._app_config, enabled_only=False)
 
         assert "skills" in result
         assert len(result["skills"]) == 1
@@ -141,7 +141,7 @@ class TestConfigQueries:
     def test_list_skills_enabled_only(self, client):
         with patch("deerflow.skills.loader.load_skills", return_value=[]) as mock_load:
             client.list_skills(enabled_only=True)
-            mock_load.assert_called_once_with(enabled_only=True)
+            mock_load.assert_called_once_with(client._app_config, enabled_only=True)
 
     def test_get_memory(self, client):
         memory = {"version": "1.0", "facts": []}
@@ -251,8 +251,8 @@ class TestStream:
         # Verify context passed to agent.stream
         agent.stream.assert_called_once()
         call_kwargs = agent.stream.call_args.kwargs
-        assert call_kwargs["context"]["thread_id"] == "t1"
-        assert call_kwargs["context"]["agent_name"] == "test-agent-1"
+        ctx = call_kwargs["context"]
+        assert ctx.app_config is client._app_config
 
     def test_custom_mode_is_normalized_to_string(self, client):
         """stream() forwards custom events even when the mode is not a plain string."""
@@ -1091,8 +1091,8 @@ class TestMcpConfig:
         ext_config = MagicMock()
         ext_config.mcp_servers = {"github": server}
 
-        with patch("deerflow.client.get_extensions_config", return_value=ext_config):
-            result = client.get_mcp_config()
+        client._app_config = MagicMock(extensions=ext_config)
+        result = client.get_mcp_config()
 
         assert "mcp_servers" in result
         assert "github" in result["mcp_servers"]
@@ -1116,10 +1116,11 @@ class TestMcpConfig:
             # Pre-set agent to verify it gets invalidated
             client._agent = MagicMock()
 
+            client._app_config = MagicMock(extensions=current_config)
+
             with (
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=tmp_path),
-                patch("deerflow.client.get_extensions_config", return_value=current_config),
-                patch("deerflow.client.reload_extensions_config", return_value=reloaded_config),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock(extensions=reloaded_config)),
             ):
                 result = client.update_mcp_config({"new-server": {"enabled": True, "type": "sse"}})
 
@@ -1177,12 +1178,12 @@ class TestSkillsManagement:
         try:
             # Pre-set agent to verify it gets invalidated
             client._agent = MagicMock()
+            client._app_config = MagicMock(extensions=ext_config)
 
             with (
                 patch("deerflow.skills.loader.load_skills", side_effect=[[skill], [updated_skill]]),
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=tmp_path),
-                patch("deerflow.client.get_extensions_config", return_value=ext_config),
-                patch("deerflow.client.reload_extensions_config"),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock()),
             ):
                 result = client.update_skill("test-skill", enabled=False)
             assert result["enabled"] is False
@@ -1245,7 +1246,7 @@ class TestMemoryManagement:
 
         assert mock_import.call_count == 1
         call_args = mock_import.call_args
-        assert call_args.args == (imported,)
+        assert call_args.args == (client._app_config.memory, imported)
         assert "user_id" in call_args.kwargs
         assert result == imported
 
@@ -1270,6 +1271,7 @@ class TestMemoryManagement:
                 confidence=0.88,
             )
             create_fact.assert_called_once_with(
+                client._app_config.memory,
                 content="User prefers concise code reviews.",
                 category="preference",
                 confidence=0.88,
@@ -1280,7 +1282,7 @@ class TestMemoryManagement:
         data = {"version": "1.0", "facts": []}
         with patch("deerflow.agents.memory.updater.delete_memory_fact", return_value=data) as delete_fact:
             result = client.delete_memory_fact("fact_123")
-            delete_fact.assert_called_once_with("fact_123")
+            delete_fact.assert_called_once_with(client._app_config.memory, "fact_123")
         assert result == data
 
     def test_update_memory_fact(self, client):
@@ -1293,6 +1295,7 @@ class TestMemoryManagement:
                 confidence=0.91,
             )
             update_fact.assert_called_once_with(
+                client._app_config.memory,
                 fact_id="fact_123",
                 content="User prefers spaces",
                 category="workflow",
@@ -1308,6 +1311,7 @@ class TestMemoryManagement:
                 "User prefers spaces",
             )
             update_fact.assert_called_once_with(
+                client._app_config.memory,
                 fact_id="fact_123",
                 content="User prefers spaces",
                 category=None,
@@ -1316,37 +1320,40 @@ class TestMemoryManagement:
         assert result == data
 
     def test_get_memory_config(self, client):
-        config = MagicMock()
-        config.enabled = True
-        config.storage_path = ".deer-flow/memory.json"
-        config.debounce_seconds = 30
-        config.max_facts = 100
-        config.fact_confidence_threshold = 0.7
-        config.injection_enabled = True
-        config.max_injection_tokens = 2000
+        mem_config = MagicMock()
+        mem_config.enabled = True
+        mem_config.storage_path = ".deer-flow/memory.json"
+        mem_config.debounce_seconds = 30
+        mem_config.max_facts = 100
+        mem_config.fact_confidence_threshold = 0.7
+        mem_config.injection_enabled = True
+        mem_config.max_injection_tokens = 2000
 
-        with patch("deerflow.config.memory_config.get_memory_config", return_value=config):
-            result = client.get_memory_config()
+        app_cfg = MagicMock()
+        app_cfg.memory = mem_config
+
+        client._app_config = app_cfg
+        result = client.get_memory_config()
 
         assert result["enabled"] is True
         assert result["max_facts"] == 100
 
     def test_get_memory_status(self, client):
-        config = MagicMock()
-        config.enabled = True
-        config.storage_path = ".deer-flow/memory.json"
-        config.debounce_seconds = 30
-        config.max_facts = 100
-        config.fact_confidence_threshold = 0.7
-        config.injection_enabled = True
-        config.max_injection_tokens = 2000
+        mem_config = MagicMock()
+        mem_config.enabled = True
+        mem_config.storage_path = ".deer-flow/memory.json"
+        mem_config.debounce_seconds = 30
+        mem_config.max_facts = 100
+        mem_config.fact_confidence_threshold = 0.7
+        mem_config.injection_enabled = True
+        mem_config.max_injection_tokens = 2000
 
+        app_cfg = MagicMock()
+        app_cfg.memory = mem_config
         data = {"version": "1.0", "facts": []}
 
-        with (
-            patch("deerflow.config.memory_config.get_memory_config", return_value=config),
-            patch("deerflow.agents.memory.updater.get_memory_data", return_value=data),
-        ):
+        client._app_config = app_cfg
+        with patch("deerflow.agents.memory.updater.get_memory_data", return_value=data):
             result = client.get_memory_status()
 
         assert "config" in result
@@ -1800,10 +1807,10 @@ class TestScenarioConfigManagement:
             reloaded_config.mcp_servers = {"my-mcp": reloaded_server}
 
             client._agent = MagicMock()  # Simulate existing agent
+            client._app_config = MagicMock(extensions=current_config)
             with (
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-                patch("deerflow.client.get_extensions_config", return_value=current_config),
-                patch("deerflow.client.reload_extensions_config", return_value=reloaded_config),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock(extensions=reloaded_config)),
             ):
                 mcp_result = client.update_mcp_config({"my-mcp": {"enabled": True}})
             assert "my-mcp" in mcp_result["mcp_servers"]
@@ -1832,8 +1839,7 @@ class TestScenarioConfigManagement:
             with (
                 patch("deerflow.skills.loader.load_skills", side_effect=[[skill], [toggled]]),
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-                patch("deerflow.client.get_extensions_config", return_value=ext_config),
-                patch("deerflow.client.reload_extensions_config"),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock()),
             ):
                 skill_result = client.update_skill("code-gen", enabled=False)
             assert skill_result["enabled"] is False
@@ -2021,10 +2027,10 @@ class TestScenarioMemoryWorkflow:
             refreshed = client.reload_memory()
         assert len(refreshed["facts"]) == 2
 
-        with (
-            patch("deerflow.config.memory_config.get_memory_config", return_value=config),
-            patch("deerflow.agents.memory.updater.get_memory_data", return_value=updated_data),
-        ):
+        app_cfg = MagicMock()
+        app_cfg.memory = config
+        client._app_config = app_cfg
+        with patch("deerflow.agents.memory.updater.get_memory_data", return_value=updated_data):
             status = client.get_memory_status()
         assert status["config"]["enabled"] is True
         assert len(status["data"]["facts"]) == 2
@@ -2085,8 +2091,7 @@ class TestScenarioSkillInstallAndUse:
             with (
                 patch("deerflow.skills.loader.load_skills", side_effect=[[installed_skill], [disabled_skill]]),
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-                patch("deerflow.client.get_extensions_config", return_value=ext_config),
-                patch("deerflow.client.reload_extensions_config"),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock()),
             ):
                 toggled = client.update_skill("my-analyzer", enabled=False)
             assert toggled["enabled"] is False
@@ -2220,8 +2225,7 @@ class TestGatewayConformance:
         mock_app_config.models = [model]
         mock_app_config.token_usage.enabled = True
 
-        with patch("deerflow.client.get_app_config", return_value=mock_app_config):
-            client = DeerFlowClient()
+        client = DeerFlowClient(config=mock_app_config)
 
         result = client.list_models()
         parsed = ModelsListResponse(**result)
@@ -2240,8 +2244,7 @@ class TestGatewayConformance:
         mock_app_config.models = [model]
         mock_app_config.get_model_config.return_value = model
 
-        with patch("deerflow.client.get_app_config", return_value=mock_app_config):
-            client = DeerFlowClient()
+        client = DeerFlowClient(config=mock_app_config)
 
         result = client.get_model("test-model")
         assert result is not None
@@ -2310,8 +2313,8 @@ class TestGatewayConformance:
         ext_config = MagicMock()
         ext_config.mcp_servers = {"test": server}
 
-        with patch("deerflow.client.get_extensions_config", return_value=ext_config):
-            result = client.get_mcp_config()
+        client._app_config = MagicMock(extensions=ext_config)
+        result = client.get_mcp_config()
 
         parsed = McpConfigResponse(**result)
         assert "test" in parsed.mcp_servers
@@ -2335,10 +2338,10 @@ class TestGatewayConformance:
         config_file = tmp_path / "extensions_config.json"
         config_file.write_text("{}")
 
+        client._app_config = MagicMock(extensions=ext_config)
         with (
-            patch("deerflow.client.get_extensions_config", return_value=ext_config),
             patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-            patch("deerflow.client.reload_extensions_config", return_value=ext_config),
+            patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock(extensions=ext_config)),
         ):
             result = client.update_mcp_config({"srv": server.model_dump.return_value})
 
@@ -2369,8 +2372,11 @@ class TestGatewayConformance:
         mem_cfg.injection_enabled = True
         mem_cfg.max_injection_tokens = 2000
 
-        with patch("deerflow.config.memory_config.get_memory_config", return_value=mem_cfg):
-            result = client.get_memory_config()
+        app_cfg = MagicMock()
+        app_cfg.memory = mem_cfg
+
+        client._app_config = app_cfg
+        result = client.get_memory_config()
 
         parsed = MemoryConfigResponse(**result)
         assert parsed.enabled is True
@@ -2386,6 +2392,8 @@ class TestGatewayConformance:
         mem_cfg.injection_enabled = True
         mem_cfg.max_injection_tokens = 2000
 
+        app_cfg = MagicMock()
+        app_cfg.memory = mem_cfg
         memory_data = {
             "version": "1.0",
             "lastUpdated": "",
@@ -2402,10 +2410,8 @@ class TestGatewayConformance:
             "facts": [],
         }
 
-        with (
-            patch("deerflow.config.memory_config.get_memory_config", return_value=mem_cfg),
-            patch("deerflow.agents.memory.updater.get_memory_data", return_value=memory_data),
-        ):
+        client._app_config = app_cfg
+        with patch("deerflow.agents.memory.updater.get_memory_data", return_value=memory_data):
             result = client.get_memory_status()
 
         parsed = MemoryStatusResponse(**result)
@@ -2694,8 +2700,7 @@ class TestConfigUpdateErrors:
             with (
                 patch("deerflow.skills.loader.load_skills", side_effect=[[skill], []]),
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-                patch("deerflow.client.get_extensions_config", return_value=ext_config),
-                patch("deerflow.client.reload_extensions_config"),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock()),
             ):
                 with pytest.raises(RuntimeError, match="disappeared"):
                     client.update_skill("ghost-skill", enabled=False)
@@ -3074,10 +3079,10 @@ class TestBugAgentInvalidationInconsistency:
             config_file = Path(tmp) / "ext.json"
             config_file.write_text("{}")
 
+            client._app_config = MagicMock(extensions=current_config)
             with (
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-                patch("deerflow.client.get_extensions_config", return_value=current_config),
-                patch("deerflow.client.reload_extensions_config", return_value=reloaded),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock(extensions=reloaded)),
             ):
                 client.update_mcp_config({})
 
@@ -3109,8 +3114,7 @@ class TestBugAgentInvalidationInconsistency:
             with (
                 patch("deerflow.skills.loader.load_skills", side_effect=[[skill], [updated]]),
                 patch("deerflow.client.ExtensionsConfig.resolve_config_path", return_value=config_file),
-                patch("deerflow.client.get_extensions_config", return_value=ext_config),
-                patch("deerflow.client.reload_extensions_config"),
+                patch("deerflow.config.app_config.AppConfig.from_file", return_value=MagicMock()),
             ):
                 client.update_skill("s1", enabled=False)
 

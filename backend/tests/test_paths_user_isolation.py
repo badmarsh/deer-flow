@@ -1,8 +1,6 @@
 """Tests for user-scoped path resolution in Paths."""
-
-from pathlib import Path
-
 import pytest
+from pathlib import Path
 
 from deerflow.config.paths import Paths
 

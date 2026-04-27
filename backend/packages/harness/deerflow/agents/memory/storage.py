@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from deerflow.config.agents_config import AGENT_NAME_PATTERN
-from deerflow.config.memory_config import get_memory_config
+from deerflow.config.memory_config import MemoryConfig
 from deerflow.config.paths import get_paths
 
 logger = logging.getLogger(__name__)
@@ -62,8 +62,15 @@ class MemoryStorage(abc.ABC):
 class FileMemoryStorage(MemoryStorage):
     """File-based memory storage provider."""
 
-    def __init__(self):
-        """Initialize the file memory storage."""
+    def __init__(self, memory_config: MemoryConfig):
+        """Initialize the file memory storage.
+
+        Args:
+            memory_config: Memory configuration (storage_path etc.). Stored on
+                the instance so per-request lookups don't need to reach for
+                ambient state.
+        """
+        self._memory_config = memory_config
         # Per-user/agent memory cache: keyed by (user_id, agent_name) tuple (None = global)
         # Value: (memory_data, file_mtime)
         self._memory_cache: dict[tuple[str | None, str | None], tuple[dict[str, Any], float | None]] = {}
@@ -83,11 +90,11 @@ class FileMemoryStorage(MemoryStorage):
 
     def _get_memory_file_path(self, agent_name: str | None = None, *, user_id: str | None = None) -> Path:
         """Get the path to the memory file."""
+        config = self._memory_config
         if user_id is not None:
             if agent_name is not None:
                 self._validate_agent_name(agent_name)
                 return get_paths().user_agent_memory_file(user_id, agent_name)
-            config = get_memory_config()
             if config.storage_path and Path(config.storage_path).is_absolute():
                 return Path(config.storage_path)
             return get_paths().user_memory_file(user_id)
@@ -95,7 +102,6 @@ class FileMemoryStorage(MemoryStorage):
         if agent_name is not None:
             self._validate_agent_name(agent_name)
             return get_paths().agent_memory_file(agent_name)
-        config = get_memory_config()
         if config.storage_path:
             p = Path(config.storage_path)
             return p if p.is_absolute() else get_paths().base_dir / p
@@ -116,20 +122,16 @@ class FileMemoryStorage(MemoryStorage):
             logger.warning("Failed to load memory file: %s", e)
             return create_empty_memory()
 
-    @staticmethod
-    def _cache_key(agent_name: str | None = None, *, user_id: str | None = None) -> tuple[str | None, str | None]:
-        return (user_id, agent_name)
-
     def load(self, agent_name: str | None = None, *, user_id: str | None = None) -> dict[str, Any]:
         """Load memory data (cached with file modification time check)."""
         file_path = self._get_memory_file_path(agent_name, user_id=user_id)
-        cache_key = self._cache_key(agent_name, user_id=user_id)
 
         try:
             current_mtime = file_path.stat().st_mtime if file_path.exists() else None
         except OSError:
             current_mtime = None
 
+        cache_key = (user_id, agent_name)
         with self._cache_lock:
             cached = self._memory_cache.get(cache_key)
             if cached is not None and cached[1] == current_mtime:
@@ -146,13 +148,13 @@ class FileMemoryStorage(MemoryStorage):
         """Reload memory data from file, forcing cache invalidation."""
         file_path = self._get_memory_file_path(agent_name, user_id=user_id)
         memory_data = self._load_memory_from_file(agent_name, user_id=user_id)
-        cache_key = self._cache_key(agent_name, user_id=user_id)
 
         try:
             mtime = file_path.stat().st_mtime if file_path.exists() else None
         except OSError:
             mtime = None
 
+        cache_key = (user_id, agent_name)
         with self._cache_lock:
             self._memory_cache[cache_key] = (memory_data, mtime)
         return memory_data
@@ -160,7 +162,6 @@ class FileMemoryStorage(MemoryStorage):
     def save(self, memory_data: dict[str, Any], agent_name: str | None = None, *, user_id: str | None = None) -> bool:
         """Save memory data to file and update cache."""
         file_path = self._get_memory_file_path(agent_name, user_id=user_id)
-        cache_key = self._cache_key(agent_name, user_id=user_id)
 
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +181,7 @@ class FileMemoryStorage(MemoryStorage):
             except OSError:
                 mtime = None
 
+            cache_key = (user_id, agent_name)
             with self._cache_lock:
                 self._memory_cache[cache_key] = (memory_data, mtime)
             logger.info("Memory saved to %s", file_path)
@@ -189,23 +191,31 @@ class FileMemoryStorage(MemoryStorage):
             return False
 
 
-_storage_instance: MemoryStorage | None = None
+# Instances keyed by (storage_class_path, id(memory_config)) so tests can
+# construct isolated storages and multi-client setups with different configs
+# don't collide on a single process-wide singleton.
+_storage_instances: dict[tuple[str, int], MemoryStorage] = {}
 _storage_lock = threading.Lock()
 
 
-def get_memory_storage() -> MemoryStorage:
-    """Get the configured memory storage instance."""
-    global _storage_instance
-    if _storage_instance is not None:
-        return _storage_instance
+def get_memory_storage(memory_config: MemoryConfig) -> MemoryStorage:
+    """Get the configured memory storage instance.
+
+    Caches one instance per ``(storage_class, memory_config)`` pair. In
+    single-config deployments this collapses to one instance; in multi-client
+    or test scenarios each config gets its own storage.
+    """
+    key = (memory_config.storage_class, id(memory_config))
+    existing = _storage_instances.get(key)
+    if existing is not None:
+        return existing
 
     with _storage_lock:
-        if _storage_instance is not None:
-            return _storage_instance
+        existing = _storage_instances.get(key)
+        if existing is not None:
+            return existing
 
-        config = get_memory_config()
-        storage_class_path = config.storage_class
-
+        storage_class_path = memory_config.storage_class
         try:
             module_path, class_name = storage_class_path.rsplit(".", 1)
             import importlib
@@ -219,13 +229,14 @@ def get_memory_storage() -> MemoryStorage:
             if not issubclass(storage_class, MemoryStorage):
                 raise TypeError(f"Configured memory storage '{storage_class_path}' is not a subclass of MemoryStorage")
 
-            _storage_instance = storage_class()
+            instance = storage_class(memory_config)
         except Exception as e:
             logger.error(
                 "Failed to load memory storage %s, falling back to FileMemoryStorage: %s",
                 storage_class_path,
                 e,
             )
-            _storage_instance = FileMemoryStorage()
+            instance = FileMemoryStorage(memory_config)
 
-    return _storage_instance
+        _storage_instances[key] = instance
+        return instance

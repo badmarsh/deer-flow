@@ -52,7 +52,7 @@ def _normalize_presented_filepath(
     if runtime.state is None:
         raise ValueError("Thread runtime state is not available")
 
-    thread_id = _get_thread_id(runtime)
+    thread_id = runtime.context.thread_id
     if not thread_id:
         raise ValueError("Thread ID is not available in runtime context or runtime config")
 
@@ -66,10 +66,7 @@ def _normalize_presented_filepath(
     virtual_prefix = VIRTUAL_PATH_PREFIX.lstrip("/")
 
     if stripped == virtual_prefix or stripped.startswith(virtual_prefix + "/"):
-        try:
-            actual_path = get_paths().resolve_virtual_path(thread_id, filepath, user_id=get_effective_user_id())
-        except TypeError:
-            actual_path = get_paths().resolve_virtual_path(thread_id, filepath)
+        actual_path = get_paths().resolve_virtual_path(thread_id, filepath, user_id=get_effective_user_id())
     else:
         actual_path = Path(filepath).expanduser().resolve()
 
