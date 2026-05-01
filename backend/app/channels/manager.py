@@ -581,13 +581,17 @@ class ChannelManager:
         )
 
         configurable = run_config.get("configurable")
-        if not isinstance(configurable, Mapping):
+        if isinstance(configurable, dict):
+            pass
+        elif isinstance(configurable, Mapping):
+            configurable = dict(configurable)
+        else:
             configurable = {}
-            run_config["configurable"] = configurable
+        run_config["configurable"] = configurable
         # Pin channel-triggered runs to the root graph namespace so follow-up
         # turns continue from the same conversation checkpoint.
-        configurable.setdefault("checkpoint_ns", "")
-        configurable.setdefault("thread_id", thread_id)
+        configurable["checkpoint_ns"] = ""
+        configurable["thread_id"] = thread_id
 
         run_context = _merge_dicts(
             DEFAULT_RUN_CONTEXT,
