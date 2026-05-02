@@ -590,9 +590,7 @@ class ChannelManager:
         )
 
         configurable = run_config.get("configurable")
-        if isinstance(configurable, dict):
-            pass
-        elif isinstance(configurable, Mapping):
+        if isinstance(configurable, Mapping):
             configurable = dict(configurable)
         else:
             configurable = {}
