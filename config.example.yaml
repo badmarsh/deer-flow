@@ -108,14 +108,6 @@ models:
     max_tokens: 8192
     supports_thinking: true
     supports_vision: true
-    when_thinking_enabled:
-      extra_body:
-        thinking:
-          type: enabled
-    when_thinking_disabled:
-      extra_body:
-        thinking:
-          type: disabled
 
   - name: gemini-2-5-pro
     display_name: Gemini 2.5 Pro (OpenRouter)
@@ -126,14 +118,6 @@ models:
     max_tokens: 8192
     supports_thinking: true
     supports_vision: true
-    when_thinking_enabled:
-      extra_body:
-        thinking:
-          type: enabled
-    when_thinking_disabled:
-      extra_body:
-        thinking:
-          type: disabled
 
   - name: gemma-4-31b-it
     display_name: Gemma 4 31B IT (OpenRouter)
@@ -292,6 +276,15 @@ models:
     supports_thinking: true
 
   # --- DashScope ---
+  - name: qwen3-235b-a22b-thinking-2507
+    display_name: Qwen 3 235B A22B Thinking 2507 (DashScope)
+    use: langchain_openai:ChatOpenAI
+    model: qwen3-235b-a22b-thinking-2507
+    api_key: $DASHSCOPE_API_KEY
+    base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    max_tokens: 8192
+    supports_thinking: true
+
   - name: qwen3-5-plus-2026-04-20
     display_name: Qwen 3.5 Plus 2026-04-20 (DashScope)
     use: langchain_openai:ChatOpenAI
