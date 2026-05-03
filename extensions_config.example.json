@@ -39,6 +39,24 @@
       ],
       "env": {},
       "description": "PostgreSQL database access"
+    },
+    "consensus": {
+      "enabled": true,
+      "type": "sse",
+      "url": "http://host.docker.internal:8095/consensus/sse",
+      "headers": {
+        "Authorization": "Bearer $CONSENSUS_API_KEY"
+      },
+      "description": "Consensus MCP server for research and knowledge synthesis"
+    },
+    "onyx": {
+      "enabled": true,
+      "type": "sse",
+      "url": "http://host.docker.internal:8096/onyx/sse",
+      "headers": {
+        "Authorization": "Bearer $ONYX_API_KEY"
+      },
+      "description": "Onyx MCP server"
     }
   },
   "skills": {}
