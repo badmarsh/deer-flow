@@ -68,7 +68,7 @@ def _make_file_sandbox_writable(file_path: os.PathLike[str] | str) -> None:
         logger.warning("Skipping sandbox chmod for symlinked upload path: %s", file_path)
         return
 
-    writable_mode = stat.S_IMODE(file_stat.st_mode) | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
+    writable_mode = stat.S_IMODE(file_stat.st_mode) | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH | stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
     chmod_kwargs = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
     os.chmod(file_path, writable_mode, **chmod_kwargs)
 
@@ -223,6 +223,7 @@ async def upload_files(
                 total_size=total_size,
             )
             written_paths.append(file_path)
+            _make_file_sandbox_writable(file_path)
 
             virtual_path = upload_virtual_path(safe_filename)
 
@@ -244,6 +245,7 @@ async def upload_files(
                 md_path = await convert_file_to_markdown(file_path)
                 if md_path:
                     written_paths.append(md_path)
+                    _make_file_sandbox_writable(md_path)
                     md_virtual_path = upload_virtual_path(md_path.name)
 
                     if sync_to_sandbox:
@@ -270,7 +272,6 @@ async def upload_files(
 
     if sync_to_sandbox:
         for file_path, virtual_path in sandbox_sync_targets:
-            _make_file_sandbox_writable(file_path)
             sandbox.update_file(virtual_path, file_path.read_bytes())
 
     message = f"Successfully uploaded {len(uploaded_files)} file(s)"
