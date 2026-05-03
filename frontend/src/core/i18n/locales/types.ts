@@ -85,6 +85,10 @@ export interface Translations {
     reasoningEffortMediumDescription: string;
     reasoningEffortHigh: string;
     reasoningEffortHighDescription: string;
+    reasoningEffortPro: string;
+    reasoningEffortProDescription: string;
+    reasoningEffortUltra: string;
+    reasoningEffortUltraDescription: string;
     searchModels: string;
     surpriseMe: string;
     surpriseMePrompt: string;

@@ -33,7 +33,7 @@ export interface LocalSettings {
   > & {
     model_name?: string | undefined;
     mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
-    reasoning_effort?: "minimal" | "low" | "medium" | "high";
+    reasoning_effort?: "minimal" | "low" | "medium" | "high" | "pro" | "ultra";
   };
 }
 

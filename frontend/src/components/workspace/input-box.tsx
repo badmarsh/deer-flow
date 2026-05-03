@@ -123,7 +123,7 @@ export function InputBox({
     "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
   > & {
     mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
-    reasoning_effort?: "minimal" | "low" | "medium" | "high";
+    reasoning_effort?: "minimal" | "low" | "medium" | "high" | "pro" | "ultra";
   };
   extraHeader?: React.ReactNode;
   isNewThread?: boolean;
@@ -135,7 +135,7 @@ export function InputBox({
       "thread_id" | "is_plan_mode" | "thinking_enabled" | "subagent_enabled"
     > & {
       mode: "flash" | "thinking" | "pro" | "ultra" | undefined;
-      reasoning_effort?: "minimal" | "low" | "medium" | "high";
+      reasoning_effort?: "minimal" | "low" | "medium" | "high" | "pro" | "ultra";
     },
   ) => void;
   onFollowupsVisibilityChange?: (visible: boolean) => void;
@@ -237,8 +237,8 @@ export function InputBox({
     [onContextChange, context, supportThinking],
   );
 
-  const handleReasoningEffortSelect = useCallback(
-    (effort: "minimal" | "low" | "medium" | "high") => {
+const handleReasoningEffortSelect = useCallback(
+    (effort: "minimal" | "low" | "medium" | "high" | "pro" | "ultra") => {
       onContextChange?.({
         ...context,
         reasoning_effort: effort,
@@ -246,7 +246,6 @@ export function InputBox({
     },
     [onContextChange, context],
   );
-
   const handleSubmit = useCallback(
     async (message: PromptInputMessage) => {
       if (status === "streaming") {
@@ -695,6 +694,10 @@ export function InputBox({
                       " " + t.inputBox.reasoningEffortMedium}
                     {context.reasoning_effort === "high" &&
                       " " + t.inputBox.reasoningEffortHigh}
+                    {context.reasoning_effort === "pro" &&
+                      " " + t.inputBox.reasoningEffortPro}
+                    {context.reasoning_effort === "ultra" &&
+                      " " + t.inputBox.reasoningEffortUltra}
                   </div>
                 </PromptInputActionMenuTrigger>
                 <PromptInputActionMenuContent className="w-70">
@@ -788,6 +791,50 @@ export function InputBox({
                           </div>
                         </div>
                         {context.reasoning_effort === "high" ? (
+                          <CheckIcon className="ml-auto size-4" />
+                        ) : (
+                          <div className="ml-auto size-4" />
+                        )}
+                      </PromptInputActionMenuItem>
+                      <PromptInputActionMenuItem
+                        className={cn(
+                          context.reasoning_effort === "pro"
+                            ? "text-accent-foreground"
+                            : "text-muted-foreground/65",
+                        )}
+                        onSelect={() => handleReasoningEffortSelect("pro")}
+                      >
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center gap-1 font-bold">
+                            {t.inputBox.reasoningEffortPro}
+                          </div>
+                          <div className="pl-2 text-xs">
+                            {t.inputBox.reasoningEffortProDescription}
+                          </div>
+                        </div>
+                        {context.reasoning_effort === "pro" ? (
+                          <CheckIcon className="ml-auto size-4" />
+                        ) : (
+                          <div className="ml-auto size-4" />
+                        )}
+                      </PromptInputActionMenuItem>
+                      <PromptInputActionMenuItem
+                        className={cn(
+                          context.reasoning_effort === "ultra"
+                            ? "text-accent-foreground"
+                            : "text-muted-foreground/65",
+                        )}
+                        onSelect={() => handleReasoningEffortSelect("ultra")}
+                      >
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center gap-1 font-bold">
+                            {t.inputBox.reasoningEffortUltra}
+                          </div>
+                          <div className="pl-2 text-xs">
+                            {t.inputBox.reasoningEffortUltraDescription}
+                          </div>
+                        </div>
+                        {context.reasoning_effort === "ultra" ? (
                           <CheckIcon className="ml-auto size-4" />
                         ) : (
                           <div className="ml-auto size-4" />
