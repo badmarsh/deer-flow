@@ -65,15 +65,15 @@
     },
     "scite": {
       "enabled": true,
-      "type": "sse",
-      "url": "http://host.docker.internal:8095/scite/sse",
+      "type": "http",
+      "url": "http://host.docker.internal:8095/scite/",
       "headers": {},
       "description": "Scite API for literature citation contexts and exact manuscript claim verification"
     },
     "consensus": {
       "enabled": true,
-      "type": "sse",
-      "url": "http://host.docker.internal:8095/consensus/sse",
+      "type": "http",
+      "url": "http://host.docker.internal:8095/consensus/",
       "headers": {},
       "description": "Consensus API for academic search and claim grounding"
     },
