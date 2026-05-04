@@ -3,6 +3,8 @@
 import logging
 import os
 import stat
+import zipfile
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
@@ -71,6 +73,62 @@ def _make_file_sandbox_writable(file_path: os.PathLike[str] | str) -> None:
     writable_mode = stat.S_IMODE(file_stat.st_mode) | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH | stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH
     chmod_kwargs = {"follow_symlinks": False} if os.chmod in os.supports_follow_symlinks else {}
     os.chmod(file_path, writable_mode, **chmod_kwargs)
+
+
+def _auto_extract_zip(
+    zip_path: Path,
+    uploads_dir: Path,
+    sandbox_uploads_virtual_root: str,
+    sync_to_sandbox: bool,
+    sandbox_sync_targets: list[tuple[Path, str]],
+) -> dict[str, str] | None:
+    """Extract a zip archive next to itself so agents can read individual files.
+
+    Returns a dict of extra file_info keys to merge into the upload record, or
+    None when extraction is skipped / fails non-fatally.
+    """
+    extract_dir = uploads_dir / zip_path.stem
+    try:
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        _make_file_sandbox_writable(extract_dir)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            # Security: reject entries with absolute paths or path traversal
+            for member in zf.infolist():
+                member_path = Path(member.filename)
+                if member_path.is_absolute() or ".." in member_path.parts:
+                    logger.warning(
+                        "Skipping unsafe zip entry %r in %s", member.filename, zip_path.name
+                    )
+                    continue
+                extracted = extract_dir / member_path
+                if member.is_dir():
+                    extracted.mkdir(parents=True, exist_ok=True)
+                    _make_file_sandbox_writable(extracted)
+                else:
+                    extracted.parent.mkdir(parents=True, exist_ok=True)
+                    extracted.write_bytes(zf.read(member.filename))
+                    _make_file_sandbox_writable(extracted)
+                    if sync_to_sandbox:
+                        rel = extracted.relative_to(uploads_dir)
+                        virtual = f"{sandbox_uploads_virtual_root}/{rel}"
+                        sandbox_sync_targets.append((extracted, virtual))
+
+        extracted_count = sum(1 for _ in extract_dir.rglob("*") if _.is_file())
+        logger.info(
+            "Auto-extracted %s → %s (%d files)", zip_path.name, extract_dir, extracted_count
+        )
+        return {
+            "extracted_dir": str(extract_dir),
+            "extracted_files": str(extracted_count),
+        }
+
+    except zipfile.BadZipFile:
+        logger.warning("Uploaded file %s is not a valid zip archive; skipping extraction", zip_path.name)
+        return None
+    except Exception:
+        logger.warning("Failed to auto-extract %s; skipping extraction", zip_path.name, exc_info=True)
+        return None
 
 
 def _uses_thread_data_mounts(sandbox_provider: SandboxProvider) -> bool:
@@ -240,7 +298,20 @@ async def upload_files(
 
             logger.info(f"Saved file: {safe_filename} ({file_size} bytes) to {file_info['path']}")
 
-            file_ext = file_path.suffix.lower()
+            # Auto-extract zip archives so agents can read individual files
+            file_path_obj = Path(file_path)
+            if file_path_obj.suffix.lower() == ".zip":
+                zip_extra = _auto_extract_zip(
+                    zip_path=file_path_obj,
+                    uploads_dir=Path(uploads_dir),
+                    sandbox_uploads_virtual_root=str(sandbox_uploads),
+                    sync_to_sandbox=sync_to_sandbox,
+                    sandbox_sync_targets=sandbox_sync_targets,
+                )
+                if zip_extra:
+                    file_info.update(zip_extra)
+
+            file_ext = file_path_obj.suffix.lower()
             if auto_convert_documents and file_ext in CONVERTIBLE_EXTENSIONS:
                 md_path = await convert_file_to_markdown(file_path)
                 if md_path:
@@ -272,7 +343,7 @@ async def upload_files(
 
     if sync_to_sandbox:
         for file_path, virtual_path in sandbox_sync_targets:
-            sandbox.update_file(virtual_path, file_path.read_bytes())
+            sandbox.update_file(virtual_path, Path(file_path).read_bytes())
 
     message = f"Successfully uploaded {len(uploaded_files)} file(s)"
     if skipped_files:
